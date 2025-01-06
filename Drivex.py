@@ -61,13 +61,12 @@ def get_text_chunks(text):
     splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     return splitter.split_text(text)
 
-# Create Vector Store with Chroma
 def get_vector_store(text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    # Initialize Chroma vector store
-    vector_store = Chroma.from_texts(text_chunks, embedding=embeddings, persist_directory="./chroma_db")
-    vector_store.persist()  # Save the database
+    # Use in-memory Chroma vector store
+    vector_store = Chroma.from_texts(text_chunks, embedding=embeddings)
     return vector_store
+
 
 # DocuVision QA Chain
 def get_qa_chain():
@@ -85,7 +84,7 @@ def get_qa_chain():
 
 def generate_answer(user_question):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
+    vector_store = Chroma.from_texts([], embedding=embeddings)  # Initialize in-memory store
     docs = vector_store.similarity_search(user_question)
     chain = get_qa_chain()
     response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
