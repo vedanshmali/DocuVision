@@ -67,7 +67,7 @@ def get_vector_store(text_chunks):
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
 
-# DocuVision QA Chain
+# QA Chain
 def get_qa_chain():
     prompt_template = """
     Use the context to answer the question accurately. If not in the context, reply "Not available in the provided context".
@@ -76,8 +76,7 @@ def get_qa_chain():
     Question: {question}
     Answer:
     """
-    # Model renamed to DocuVision
-    model = ChatGoogleGenerativeAI(model="DocuVision", temperature=0.3)
+    model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     return load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
@@ -91,7 +90,7 @@ def generate_answer(user_question):
 
 # Main Function
 def main():
-    st.set_page_config(page_title="DocuVision: Intelligent Document Processing", layout="wide")
+    st.set_page_config(page_title="DocuVision", layout="wide")
     
     # Dark/Light Mode Toggle
     dark_mode = st.checkbox("Enable Dark Mode")
@@ -119,7 +118,7 @@ def main():
         )
 
     # Title
-    st.title("DocuVision: Intelligent Document Processing")
+    st.title("DocuVision")
 
     # File Upload
     st.subheader("Upload Files")
