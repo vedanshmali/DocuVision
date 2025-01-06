@@ -1,0 +1,10 @@
+streamlit
+PyPDF2
+pandas
+Pillow
+pytesseract
+langchain
+faiss-cpu
+langchain-google-genai
+google-generativeai
+python-dotenv
