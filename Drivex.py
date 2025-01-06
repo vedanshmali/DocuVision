@@ -6,7 +6,7 @@ import pytesseract
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
-from langchain.vectorstores import Chroma
+from langchain.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
@@ -61,12 +61,11 @@ def get_text_chunks(text):
     splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     return splitter.split_text(text)
 
+# Create Vector Store
 def get_vector_store(text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    # Use in-memory Chroma vector store
-    vector_store = Chroma.from_texts(text_chunks, embedding=embeddings)
-    return vector_store
-
+    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+    vector_store.save_local("faiss_index")
 
 # DocuVision QA Chain
 def get_qa_chain():
@@ -84,7 +83,7 @@ def get_qa_chain():
 
 def generate_answer(user_question):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = Chroma.from_texts([], embedding=embeddings)  # Initialize in-memory store
+    vector_store = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
     docs = vector_store.similarity_search(user_question)
     chain = get_qa_chain()
     response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
