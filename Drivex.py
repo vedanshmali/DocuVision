@@ -1,8 +1,6 @@
+import os
 import streamlit as st
 from PyPDF2 import PdfReader
-import pandas as pd
-from PIL import Image
-import pytesseract
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
@@ -11,154 +9,138 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
-import os
 
 # Load environment variables
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Configure Tesseract (if not in system PATH, set its location here)
-pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'  # Modify path if needed
-
-# Functions for Data Extraction
-def extract_pdf_text(file):
-    pdf_reader = PdfReader(file)
+def get_pdf_text(pdf_docs):
+    """
+    Extract text from uploaded PDF files.
+    """
     text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text()
+    for pdf in pdf_docs:
+        try:
+            pdf_reader = PdfReader(pdf)
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+        except Exception as e:
+            st.error(f"Error reading PDF file: {str(e)}")
     return text
 
-def extract_excel_data(file):
-    try:
-        df = pd.read_excel(file)
-        return df
-    except Exception as e:
-        return str(e)
-
-def extract_image_text(file):
-    try:
-        image = Image.open(file)
-        text = pytesseract.image_to_string(image)  # Extract text using Tesseract
-        return text
-    except Exception as e:
-        return f"Error extracting text from image: {str(e)}"
-
-# Process Uploaded Files
-def process_files(files):
-    all_text = ""
-    for file in files:
-        if file.type == "application/pdf":
-            all_text += extract_pdf_text(file)
-        elif file.type in ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]:
-            df = extract_excel_data(file)
-            all_text += df.to_string() if isinstance(df, pd.DataFrame) else str(df)
-        elif file.type.startswith("image/"):
-            all_text += extract_image_text(file)
-    return all_text
-
-# Chunk Text
 def get_text_chunks(text):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-    return splitter.split_text(text)
+    """
+    Split the extracted text into smaller chunks.
+    """
+    if not text.strip():
+        raise ValueError("The input text is empty. Ensure the PDFs contain extractable text.")
+    
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+    chunks = text_splitter.split_text(text)
+    
+    if not chunks:
+        raise ValueError("Text splitting failed. No chunks were created.")
+    
+    return chunks
 
-# Create Vector Store
 def get_vector_store(text_chunks):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
+    """
+    Create and save a FAISS vector store from text chunks.
+    """
+    if not text_chunks:
+        raise ValueError("No text chunks provided to create the vector store.")
 
-# QA Chain
-def get_qa_chain():
+    try:
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+        vector_store.save_local("faiss_index")
+    except Exception as e:
+        st.error(f"Error creating vector store: {str(e)}")
+        raise
+
+def get_conversational_chain():
     prompt_template = """
-    Use the context to answer the question accurately. If not in the context, reply "Not available in the provided context".
+    You are an intelligent assistant. Use the following context to answer the question as thoroughly as possible. 
+    If the answer is not in the context, explicitly say: "The answer is not available in the provided context."
+
     Context:
     {context}
-    Question: {question}
+
+    Question:
+    {question}
+
     Answer:
     """
     model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    return load_qa_chain(model, chain_type="stuff", prompt=prompt)
+    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
+    return chain
 
-def generate_answer(user_question):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    docs = vector_store.similarity_search(user_question)
-    chain = get_qa_chain()
-    response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-    return response["output_text"]
 
-# Main Function
+def user_input(user_question):
+    """
+    Handle user question and provide an answer using the conversational chain.
+    """
+    try:
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        new_db = FAISS.load_local("faiss_index", embeddings)
+        docs = new_db.similarity_search(user_question)
+        
+        if not docs:
+            st.warning("No relevant context found for the question.")
+            return
+
+        chain = get_conversational_chain()
+        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+        st.write("Reply:", response["output_text"])
+    except Exception as e:
+        st.error(f"Error generating response: {str(e)}")
+
 def main():
-    st.set_page_config(page_title="DocuVision", layout="wide")
-    
-    # Dark/Light Mode Toggle
-    dark_mode = st.checkbox("Enable Dark Mode")
-    if dark_mode:
-        st.markdown(
-            """
-            <style>
-                body { background-color: #121212; color: white; }
-                .stButton > button { background-color: #333; color: white; border: 1px solid white; }
-                .stTextInput > div { background-color: #333; color: white; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            """
-            <style>
-                body { background-color: white; color: black; }
-                .stButton > button { background-color: #4caf50; color: white; border: none; }
-                .stTextInput > div { background-color: white; color: black; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.set_page_config(page_title="Chat with PDF", layout="wide")
+    st.header("Chat with PDF using Gemini 💁")
 
-    # Title
-    st.title("DocuVision")
+    user_question = st.text_input("Ask a Question from the PDF Files")
 
-    # File Upload
-    st.subheader("Upload Files")
-    files = st.file_uploader(
-        "Upload PDF, Excel, or Images", accept_multiple_files=True, type=["pdf", "xlsx", "xls", "png", "jpg", "jpeg"]
-    )
+    if user_question:
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        new_db = FAISS.load_local("faiss_index", embeddings)
+        docs = new_db.similarity_search(user_question)
+        st.write("Retrieved Documents:", docs)  # Debug retrieved documents
 
-    # Process Files
-    if st.button("Process Files"):
-        if files:
-            with st.spinner("Processing files..."):
-                raw_text = process_files(files)
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("Files processed successfully!")
+        if docs:
+            chain = get_conversational_chain()
+            response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+            st.write("Reply:", response["output_text"])
         else:
-            st.warning("Please upload files before processing.")
+            st.warning("No relevant context found for the question.")
 
-    # Auto-Completion & Question Input
-    st.subheader("Ask a Question")
-    question_col, suggestions_col = st.columns([2, 1])
+    with st.sidebar:
+        st.title("Menu:")
+        pdf_docs = st.file_uploader(
+            "Upload your PDF Files and Click on the Submit & Process Button",
+            accept_multiple_files=True
+        )
+        if st.button("Submit & Process"):
+            if pdf_docs:
+                with st.spinner("Processing..."):
+                    try:
+                        # Step 1: Extract text
+                        raw_text = get_pdf_text(pdf_docs)
+                        st.write("Extracted Text Preview:", raw_text[:1000])  # Debug extracted text
 
-    with question_col:
-        user_question = st.text_input("Type your question here:")
-    with suggestions_col:
-        st.markdown("### Suggestions:")
-        suggestions = ["What is the summary?", "Can you provide insights?", "What are the key points?"]
-        for suggestion in suggestions:
-            if st.button(suggestion):
-                user_question = suggestion
+                        # Step 2: Split text into chunks
+                        text_chunks = get_text_chunks(raw_text)
+                        st.write("Sample Chunks:", text_chunks[:5])  # Debug text chunks
 
-    # Generate Answer
-    if st.button("Get Answer"):
-        if user_question:
-            with st.spinner("Generating answer..."):
-                answer = generate_answer(user_question)
-                st.subheader("Answer:")
-                st.success(answer)
-        else:
-            st.warning("Please enter a question.")
+                        # Step 3: Create vector store
+                        get_vector_store(text_chunks)
+                        st.success("Files processed successfully!")
+                    except Exception as e:
+                        st.error(f"Error during processing: {str(e)}")
+            else:
+                st.warning("Please upload PDF files before processing.")
+
 
 if __name__ == "__main__":
     main()
