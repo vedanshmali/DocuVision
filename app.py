@@ -1,6 +1,9 @@
 import os
 import streamlit as st
 from PyPDF2 import PdfReader
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
@@ -15,9 +18,6 @@ load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 def get_pdf_text(pdf_docs):
-    """
-    Extract text from uploaded PDF files.
-    """
     text = ""
     for pdf in pdf_docs:
         try:
@@ -28,28 +28,28 @@ def get_pdf_text(pdf_docs):
             st.error(f"Error reading PDF file: {str(e)}")
     return text
 
+def get_excel_text(excel_files):
+    text = ""
+    excel_data = {}
+    for excel in excel_files:
+        try:
+            df = pd.read_excel(excel)
+            text += df.to_string(index=False)
+            excel_data[excel.name] = df  # Store Excel data for person details feature
+        except Exception as e:
+            st.error(f"Error reading Excel file: {str(e)}")
+    return text, excel_data
+
 def get_text_chunks(text):
-    """
-    Split the extracted text into smaller chunks.
-    """
     if not text.strip():
-        raise ValueError("The input text is empty. Ensure the PDFs contain extractable text.")
-    
+        raise ValueError("The input text is empty. Ensure the files contain extractable text.")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
     chunks = text_splitter.split_text(text)
-    
     if not chunks:
         raise ValueError("Text splitting failed. No chunks were created.")
-    
     return chunks
 
 def get_vector_store(text_chunks):
-    """
-    Create and save a FAISS vector store from text chunks.
-    """
-    if not text_chunks:
-        raise ValueError("No text chunks provided to create the vector store.")
-
     try:
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
         vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
@@ -76,71 +76,166 @@ def get_conversational_chain():
     chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
     return chain
 
-
-def user_input(user_question):
-    """
-    Handle user question and provide an answer using the conversational chain.
-    """
+def chat_with_user(question):
     try:
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
         new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-        docs = new_db.similarity_search(user_question)
-        
+        docs = new_db.similarity_search(question)
+
         if not docs:
-            st.warning("No relevant context found for the question.")
-            return
+            return "No relevant context found for the question."
 
         chain = get_conversational_chain()
-        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-        st.write("Reply:", response["output_text"])
+        response = chain({"input_documents": docs, "question": question}, return_only_outputs=True)
+        return response["output_text"]
     except Exception as e:
-        st.error(f"Error generating response: {str(e)}")
+        return f"Error generating response: {str(e)}"
+
+def get_summary(text):
+    return "Summary: " + " ".join(text.split()[:100]) + "..."
+
+def get_person_details(person_name, excel_data):
+    details = []
+    for file, df in excel_data.items():
+        matched_rows = df[df.apply(lambda row: row.astype(str).str.contains(person_name, case=False).any(), axis=1)]
+        if not matched_rows.empty:
+            details.append((file, matched_rows))
+    return details
+
+def visualize_excel_data(excel_data):
+    for file, df in excel_data.items():
+        st.subheader(f"Data from {file}")
+        st.write(df)
+
+        # Plot data if possible (only for numerical data)
+        if df.select_dtypes(include=['number']).shape[1] > 0:
+            st.subheader("Data Visualization")
+            numerical_columns = df.select_dtypes(include=['number']).columns.tolist()
+            st.write(f"Visualizing data for: {', '.join(numerical_columns)}")
+
+            for col in numerical_columns:
+                fig, ax = plt.subplots()
+                sns.histplot(df[col], kde=True, ax=ax)
+                ax.set_title(f"Distribution of {col}")
+                st.pyplot(fig)
 
 def main():
-    st.set_page_config(page_title="Chat with PDF", layout="wide")
-    st.header("Chat with PDF using Gemini 💁")
+    st.set_page_config(page_title="Chat with Files", layout="wide")
+    st.title("Chat with PDF and Excel Files")
 
-    user_question = st.text_input("Ask a Question from the PDF Files")
+    # Custom Dark Theme CSS
+    st.markdown(
+        """
+        <style>
+        body {
+            background-color: #2e2e2e;
+            color: #f1f1f1;
+        }
+        .main {
+            background-color: #2e2e2e;
+            padding: 20px;
+        }
+        .sidebar {
+            background-color: #383838;
+            border-right: 2px solid #505050;
+        }
+        h1, h2, h3, h4, h5, h6 {
+            color: #f1f1f1;
+            font-family: 'Arial', sans-serif;
+        }
+        .stButton button {
+            background-color: #1c6b91;
+            color: white;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+        .stButton button:hover {
+            background-color: #165a7f;
+        }
+        .stTextInput input {
+            background-color: #383838;
+            border: 2px solid #1c6b91;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            color: #f1f1f1;
+        }
+        .stTextInput input:focus {
+            outline: none;
+            border-color: #1c6b91;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
-    if user_question:
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-        new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-        docs = new_db.similarity_search(user_question)
-        st.write("Retrieved Documents:", docs)  # Debug retrieved documents
+    # Sidebar for file uploads
+    st.sidebar.header("Upload Files for Processing")
+    pdf_docs = st.sidebar.file_uploader("Upload PDF Files", accept_multiple_files=True, type=["pdf"])
+    excel_files = st.sidebar.file_uploader("Upload Excel Files", accept_multiple_files=True, type=["xlsx"])
+    process_button = st.sidebar.button("Process Files")
 
-        if docs:
-            chain = get_conversational_chain()
-            response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-            st.write("Reply:", response["output_text"])
-        else:
-            st.warning("No relevant context found for the question.")
+    user_question = st.text_input("Ask a question based on uploaded files:")
+    person_name = st.text_input("Enter person's name to get details:")
 
-    with st.sidebar:
-        st.title("Menu:")
-        pdf_docs = st.file_uploader(
-            "Upload your PDF Files and Click on the Submit & Process Button",
-            accept_multiple_files=True
-        )
-        if st.button("Submit & Process"):
-            if pdf_docs:
-                with st.spinner("Processing..."):
-                    try:
-                        # Step 1: Extract text
-                        raw_text = get_pdf_text(pdf_docs)
-                        st.write("Extracted Text Preview:", raw_text[:1000])  # Debug extracted text
+    # Initialize raw_text variable
+    raw_text = ""
+    excel_data = {}
 
-                        # Step 2: Split text into chunks
+    if process_button:
+        if pdf_docs or excel_files:
+            with st.spinner("Processing..."):
+                try:
+                    if pdf_docs:
+                        raw_text += get_pdf_text(pdf_docs)
+                    if excel_files:
+                        raw_text, excel_data = get_excel_text(excel_files)
+
+                    if raw_text.strip():  # Only process if text is not empty
+                        st.write("Extracted Text (Debug):", raw_text[:1000])  # Debug text extraction
+
                         text_chunks = get_text_chunks(raw_text)
-                        st.write("Sample Chunks:", text_chunks[:5])  # Debug text chunks
+                        st.write("Text Chunks (Debug):", text_chunks[:5])  # Debug text chunks
 
-                        # Step 3: Create vector store
                         get_vector_store(text_chunks)
-                        st.success("Files processed successfully!")
-                    except Exception as e:
-                        st.error(f"Error during processing: {str(e)}")
-            else:
-                st.warning("Please upload PDF files before processing.")
+                        st.success("Files processed successfully! You can now ask questions.")
+                    else:
+                        st.warning("No extractable text found in the uploaded files.")
+                except Exception as e:
+                    st.error(f"Error during processing: {str(e)}")
+        else:
+            st.warning("Please upload files before processing.")
 
+    # Person details feature
+    if person_name:
+        st.write(f"Searching for details about: {person_name}")
+        details = get_person_details(person_name, excel_data)
+        if details:
+            for file, data in details:
+                st.write(f"Details from {file}:")
+                st.write(data)
+        else:
+            st.write(f"No details found for {person_name}.")
+
+    # Question-answer feature
+    if user_question:
+        st.write("Your Question:", user_question)
+        answer = chat_with_user(user_question)
+        st.write("Answer:", answer)
+
+    # Summary feature
+    if raw_text.strip():
+        summary = get_summary(raw_text)
+        st.write("Summary:", summary)
+
+    # Word count feature
+    if raw_text.strip():
+        st.write("Word count of the extracted text:", len(raw_text.split()))
+
+    # Visualize Excel Data (Charts)
+    if excel_data:
+        visualize_excel_data(excel_data)
 
 if __name__ == "__main__":
     main()
