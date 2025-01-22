@@ -8,3 +8,4 @@ faiss-cpu
 langchain-google-genai
 google-generativeai
 python-dotenv
+matplotlib
